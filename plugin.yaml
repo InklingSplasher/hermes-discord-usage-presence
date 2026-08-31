@@ -1,0 +1,28 @@
+name: hermes-discord-usage-presence
+version: 0.1.0
+description: Show OpenAI Codex account usage in the Hermes Discord bot presence
+author: Hermes Discord Usage Presence contributors
+kind: standalone
+provides_tools: []
+provides_hooks: []
+platforms:
+  - discord
+config_schema:
+  window:
+    type: string
+    default: session
+    enum:
+      - session
+      - weekly
+    description: Preferred usage window; falls back to the other valid window
+  interval_seconds:
+    type: integer
+    default: 300
+    minimum: 60
+    description: Seconds between usage refreshes
+  bar_width:
+    type: integer
+    default: 10
+    minimum: 1
+    maximum: 30
+    description: Number of cells in the usage bar

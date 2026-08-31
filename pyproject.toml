@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-discord-usage-presence"
+version = "0.1.0"
+description = "Hermes plugin that shows OpenAI Codex usage in Discord presence"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Hermes Discord Usage Presence contributors"}]
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
