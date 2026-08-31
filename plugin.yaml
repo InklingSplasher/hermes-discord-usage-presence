@@ -1,6 +1,6 @@
 name: hermes-discord-usage-presence
 version: 0.1.0
-description: Show OpenAI Codex account usage in the Hermes Discord bot presence
+description: Show Codex or Claude account usage in the Hermes Discord bot presence
 author: Hermes Discord Usage Presence contributors
 kind: standalone
 provides_tools: []
@@ -8,13 +8,24 @@ provides_hooks: []
 platforms:
   - discord
 config_schema:
+  provider:
+    type: string
+    default: codex
+    enum:
+      - codex
+      - claude
+    description: Account usage provider queried through Hermes
   window:
     type: string
-    default: session
+    default: auto
     enum:
+      - auto
       - session
       - weekly
-    description: Preferred usage window; falls back to the other valid window
+      - fable_week
+      - opus_week
+      - sonnet_week
+    description: Preferred usage window; auto uses provider-specific defaults
   interval_seconds:
     type: integer
     default: 300

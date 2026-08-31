@@ -1,4 +1,4 @@
-"""Discord presence controller for OpenAI Codex account usage.
+"""Discord presence controller for Codex or Claude account usage.
 
 The Discord SDK is deliberately imported only while building an activity. The
 Hermes Discord adapter owns that dependency and supplies its native ``Bot`` to
@@ -16,7 +16,48 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WINDOW = "session"
+DEFAULT_PROVIDER = "codex"
+PROVIDER_IDS = {"codex": "openai-codex", "claude": "anthropic"}
+PROVIDER_ALIASES = {
+    "codex": "codex",
+    "openai-codex": "codex",
+    "claude": "claude",
+    "anthropic": "claude",
+}
+
+DEFAULT_WINDOW = "auto"
+SUPPORTED_WINDOWS = {
+    "auto",
+    "session",
+    "weekly",
+    "fable_week",
+    "opus_week",
+    "sonnet_week",
+}
+WINDOW_LABELS = {
+    "session": ("session", "Session"),
+    "weekly": ("weekly", "Weekly"),
+    "current session": ("session", "Current session"),
+    "current week": ("weekly", "Current week"),
+    "fable week": ("fable_week", "Fable week"),
+    "current week (fable)": ("fable_week", "Fable week"),
+    "opus week": ("opus_week", "Opus week"),
+    "current week (opus)": ("opus_week", "Opus week"),
+    "sonnet week": ("sonnet_week", "Sonnet week"),
+    "current week (sonnet)": ("sonnet_week", "Sonnet week"),
+}
+AUTO_WINDOW_FALLBACKS = {
+    "codex": ("session", "weekly"),
+    "claude": ("fable_week", "opus_week", "weekly", "session", "sonnet_week"),
+}
+WINDOW_FALLBACKS = {
+    "session": ("session", "weekly", "fable_week", "opus_week", "sonnet_week"),
+    "weekly": ("weekly", "fable_week", "opus_week", "sonnet_week", "session"),
+    "fable_week": ("fable_week", "weekly", "session", "opus_week", "sonnet_week"),
+    "opus_week": ("opus_week", "weekly", "session", "fable_week", "sonnet_week"),
+    "sonnet_week": ("sonnet_week", "weekly", "session", "fable_week", "opus_week"),
+}
+
 DEFAULT_INTERVAL_SECONDS = 300
 MIN_INTERVAL_SECONDS = 60
 DEFAULT_BAR_WIDTH = 10
@@ -40,12 +81,18 @@ class PresenceSettings:
     window: str = DEFAULT_WINDOW
     interval_seconds: int = DEFAULT_INTERVAL_SECONDS
     bar_width: int = DEFAULT_BAR_WIDTH
+    provider: str = DEFAULT_PROVIDER
 
     @classmethod
     def from_context(cls, ctx: Any) -> "PresenceSettings":
+        raw_provider = ctx.get_config("provider", DEFAULT_PROVIDER)
+        provider = PROVIDER_ALIASES.get(
+            str(raw_provider or "").strip().lower(), DEFAULT_PROVIDER
+        )
+
         raw_window = ctx.get_config("window", DEFAULT_WINDOW)
         window = str(raw_window or "").strip().lower()
-        if window not in {"session", "weekly"}:
+        if window not in SUPPORTED_WINDOWS:
             window = DEFAULT_WINDOW
 
         interval = _integer_setting(
@@ -59,7 +106,12 @@ class PresenceSettings:
             DEFAULT_BAR_WIDTH,
         )
         bar_width = max(MIN_BAR_WIDTH, min(MAX_BAR_WIDTH, bar_width))
-        return cls(window=window, interval_seconds=interval, bar_width=bar_width)
+        return cls(
+            window=window,
+            interval_seconds=interval,
+            bar_width=bar_width,
+            provider=provider,
+        )
 
 
 @dataclass
@@ -85,22 +137,31 @@ def _finite_percent(value: Any) -> Optional[int]:
     return int(round(max(0.0, min(100.0, numeric))))
 
 
-def select_usage_window(snapshot: Any, preference: str) -> Optional[tuple[str, int]]:
-    """Select the preferred valid Session/Weekly window, falling back to the other."""
+def select_usage_window(
+    snapshot: Any,
+    preference: str,
+    provider: str = DEFAULT_PROVIDER,
+) -> Optional[tuple[str, int]]:
+    """Select a valid Codex/Claude window using the configured fallback order."""
     valid: dict[str, tuple[str, int]] = {}
     for window in getattr(snapshot, "windows", ()) or ():
         label = str(getattr(window, "label", "") or "").strip()
-        normalized = label.casefold()
-        if normalized not in {"session", "weekly"}:
+        window_info = WINDOW_LABELS.get(label.casefold())
+        if window_info is None:
             continue
         percent = _finite_percent(getattr(window, "used_percent", None))
         if percent is not None:
-            canonical = "Session" if normalized == "session" else "Weekly"
-            valid[normalized] = (canonical, percent)
+            key, canonical = window_info
+            valid[key] = (canonical, percent)
 
-    requested = preference if preference in {"session", "weekly"} else DEFAULT_WINDOW
-    alternate = "weekly" if requested == "session" else "session"
-    return valid.get(requested) or valid.get(alternate)
+    provider_key = PROVIDER_ALIASES.get(str(provider).strip().lower(), DEFAULT_PROVIDER)
+    if preference == "auto":
+        fallback_order = AUTO_WINDOW_FALLBACKS[provider_key]
+    else:
+        fallback_order = WINDOW_FALLBACKS.get(
+            preference, AUTO_WINDOW_FALLBACKS[provider_key]
+        )
+    return next((valid[key] for key in fallback_order if key in valid), None)
 
 
 def format_presence(label: str, used_percent: int, bar_width: int) -> str:
@@ -109,7 +170,15 @@ def format_presence(label: str, used_percent: int, bar_width: int) -> str:
     width = max(MIN_BAR_WIDTH, min(MAX_BAR_WIDTH, int(bar_width)))
     filled = max(0, min(width, int(round(percent * width / 100))))
     bar = "█" * filled + "░" * (width - filled)
-    window = {"session": "5h", "weekly": "7d"}.get(label.casefold(), label)
+    window = {
+        "session": "5h",
+        "weekly": "7d",
+        "current session": "5h",
+        "current week": "7d",
+        "fable week": "7d Fable",
+        "opus week": "7d Opus",
+        "sonnet week": "7d Sonnet",
+    }.get(label.casefold(), label)
     return f"{window} {bar} {percent}% USED"
 
 
@@ -221,11 +290,18 @@ class PresenceController:
             import agent.account_usage
 
             snapshot = await asyncio.to_thread(
-                agent.account_usage.fetch_account_usage, "openai-codex"
+                agent.account_usage.fetch_account_usage,
+                PROVIDER_IDS[self._settings.provider],
             )
-            selected = select_usage_window(snapshot, self._settings.window)
+            selected = select_usage_window(
+                snapshot,
+                self._settings.window,
+                self._settings.provider,
+            )
             if selected is None:
-                logger.debug("No valid Session or Weekly Codex usage window")
+                logger.debug(
+                    "No valid account usage window for %s", self._settings.provider
+                )
                 return False
 
             label, percent = selected
@@ -238,7 +314,7 @@ class PresenceController:
             raise
         except Exception:
             logger.warning(
-                "Could not refresh Discord Codex usage presence; keeping the last good presence",
+                "Could not refresh Discord account usage presence; keeping the last good presence",
                 exc_info=True,
             )
             return False

@@ -86,24 +86,44 @@ def window(label, used_percent):
 
 def test_settings_defaults_and_invalid_values_fall_back():
     settings = presence.PresenceSettings.from_context(
-        FakeContext({"window": "month", "interval_seconds": True, "bar_width": "bad"})
+        FakeContext(
+            {
+                "provider": "other",
+                "window": "month",
+                "interval_seconds": True,
+                "bar_width": "bad",
+            }
+        )
     )
 
     assert settings == presence.PresenceSettings(
-        window="session", interval_seconds=300, bar_width=10
+        window="auto", interval_seconds=300, bar_width=10, provider="codex"
     )
 
 
-def test_settings_normalize_and_enforce_bounds():
+def test_settings_normalize_aliases_and_enforce_bounds():
     low = presence.PresenceSettings.from_context(
-        FakeContext({"window": " Weekly ", "interval_seconds": 2, "bar_width": 0})
+        FakeContext(
+            {
+                "provider": " Anthropic ",
+                "window": " Opus_Week ",
+                "interval_seconds": 2,
+                "bar_width": 0,
+            }
+        )
     )
     high = presence.PresenceSettings.from_context(
-        FakeContext({"interval_seconds": "900", "bar_width": 999})
+        FakeContext(
+            {
+                "provider": "openai-codex",
+                "interval_seconds": "900",
+                "bar_width": 999,
+            }
+        )
     )
 
-    assert low == presence.PresenceSettings("weekly", 60, 1)
-    assert high == presence.PresenceSettings("session", 900, 30)
+    assert low == presence.PresenceSettings("opus_week", 60, 1, "claude")
+    assert high == presence.PresenceSettings("auto", 900, 30, "codex")
 
 
 def test_window_selection_prefers_requested_valid_window():
@@ -124,6 +144,30 @@ def test_window_selection_falls_back_to_other_available_window():
     assert presence.select_usage_window(
         snapshot(window("Session", 22), window("Weekly", None)), "weekly"
     ) == ("Session", 22)
+
+
+def test_claude_auto_prefers_fable_then_opus_and_supports_explicit_windows():
+    windows = snapshot(
+        window("Current session", 12),
+        window("Current week", 34),
+        window("Fable week", 56),
+        window("Opus week", 78),
+        window("Sonnet week", 90),
+    )
+
+    assert presence.select_usage_window(windows, "auto", "claude") == (
+        "Fable week",
+        56,
+    )
+    assert presence.select_usage_window(
+        snapshot(window("Current week", 34), window("Opus week", 78)),
+        "auto",
+        "anthropic",
+    ) == ("Opus week", 78)
+    assert presence.select_usage_window(windows, "sonnet_week", "claude") == (
+        "Sonnet week",
+        90,
+    )
 
 
 def test_window_selection_rejects_missing_nonfinite_and_unrelated_windows():
@@ -148,6 +192,15 @@ def test_presence_format_is_clamped_and_uses_requested_bar_width():
     )
     assert presence.format_presence("Weekly", 104, 10) == (
         "7d ██████████ 100% USED"
+    )
+    assert presence.format_presence("Current session", 50, 4) == (
+        "5h ██░░ 50% USED"
+    )
+    assert presence.format_presence("Fable week", 63, 10) == (
+        "7d Fable ██████░░░░ 63% USED"
+    )
+    assert presence.format_presence("Opus week", 34, 10) == (
+        "7d Opus ███░░░░░░░ 34% USED"
     )
 
 
@@ -190,6 +243,47 @@ def test_refresh_fetches_off_loop_and_uses_watching_activity(monkeypatch, fake_d
         assert bot.presence_calls[0].type == fake_discord.ActivityType.watching
         assert bot.presence_calls[0].name == "7d ██░░ 50% USED"
         assert state.last_good_text == bot.presence_calls[0].name
+
+    asyncio.run(run())
+
+
+def test_refresh_uses_anthropic_for_claude_and_claude_auto_window(
+    monkeypatch, fake_discord
+):
+    async def run():
+        ctx = FakeContext()
+        bot = FakeBot()
+        controller = presence.PresenceController(
+            ctx,
+            presence.PresenceSettings(
+                window="auto", bar_width=4, provider="claude"
+            ),
+        )
+        state = presence._BotState(bot, None, None)
+        calls = []
+
+        account_usage = ModuleType("agent.account_usage")
+
+        def fetch_account_usage(provider):
+            calls.append(provider)
+            return snapshot(
+                window("Current week", 20),
+                window("Opus week", 49.6),
+            )
+
+        account_usage.fetch_account_usage = fetch_account_usage
+        agent = ModuleType("agent")
+        agent.__path__ = []
+        agent.account_usage = account_usage
+        monkeypatch.setitem(sys.modules, "agent", agent)
+        monkeypatch.setitem(sys.modules, "agent.account_usage", account_usage)
+
+        result = await controller._refresh(state)
+
+        assert result is True
+        assert calls == ["anthropic"]
+        assert bot.presence_calls[0].type == fake_discord.ActivityType.watching
+        assert bot.presence_calls[0].name == "7d Opus ██░░ 50% USED"
 
     asyncio.run(run())
 
@@ -353,11 +447,24 @@ def test_real_plugin_manager_discovers_and_loads_root_manifest(tmp_path, monkeyp
     assert manifests[0].key == "hermes-discord-usage-presence"
     assert manifests[0].manifest_version == 1
     assert manifests[0].config_schema == {
+        "provider": {
+            "type": "string",
+            "default": "codex",
+            "enum": ["codex", "claude"],
+            "description": "Account usage provider queried through Hermes",
+        },
         "window": {
             "type": "string",
-            "default": "session",
-            "enum": ["session", "weekly"],
-            "description": "Preferred usage window; falls back to the other valid window",
+            "default": "auto",
+            "enum": [
+                "auto",
+                "session",
+                "weekly",
+                "fable_week",
+                "opus_week",
+                "sonnet_week",
+            ],
+            "description": "Preferred usage window; auto uses provider-specific defaults",
         },
         "interval_seconds": {
             "type": "integer",

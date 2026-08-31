@@ -1,15 +1,17 @@
 # Hermes Discord Usage Presence
 
-A standalone native plugin for Hermes that shows OpenAI Codex account usage as
-the Discord bot's watching activity. It uses Hermes' existing Discord client
-and account-usage fetcher; it does not patch the Discord adapter and does not
-install or vendor `discord.py`.
+A standalone native plugin for Hermes that shows OpenAI Codex or Anthropic
+Claude account usage as the Discord bot's watching activity. It uses Hermes'
+existing Discord client and account-usage fetcher; it does not patch the Discord
+adapter and does not install or vendor `discord.py`.
 
 Example activities with the default 10-cell bar:
 
 ```text
 Watching 5h ██░░░░░░░░ 21% USED
 Watching 7d ████░░░░░░ 40% USED
+Watching 7d Fable ██████░░░░ 63% USED
+Watching 7d Opus ███░░░░░░░ 34% USED
 ```
 
 The plugin is compatible with Hermes 0.20.6 and newer.
@@ -35,12 +37,24 @@ The manifest is at the repository root, so the cloned repository is directly
 discoverable as a native Hermes plugin. Enabling, disabling, or changing the
 settings requires a gateway restart before the Discord bot uses the new state.
 
-## Configure
+## Update
 
-Defaults are `session`, 300 seconds, and a 10-cell bar:
+Git-installed plugins are not updated automatically. Pull a newer version and
+restart the gateway with:
 
 ```console
-hermes config set plugins.entries.hermes-discord-usage-presence.settings.window weekly
+hermes plugins update hermes-discord-usage-presence
+hermes gateway restart
+```
+
+## Configure
+
+Defaults are provider `codex`, window `auto`, 300 seconds, and a 10-cell bar.
+To use Claude instead:
+
+```console
+hermes config set plugins.entries.hermes-discord-usage-presence.settings.provider claude
+hermes config set plugins.entries.hermes-discord-usage-presence.settings.window auto
 hermes config set plugins.entries.hermes-discord-usage-presence.settings.interval_seconds 300
 hermes config set plugins.entries.hermes-discord-usage-presence.settings.bar_width 10
 hermes gateway restart
@@ -50,18 +64,23 @@ Settings:
 
 | Setting | Values | Default | Behavior |
 | --- | --- | --- | --- |
-| `window` | `session` or `weekly` | `session` | Preferred window, not a hard requirement |
+| `provider` | `codex` or `claude` | `codex` | Hermes account-usage source |
+| `window` | `auto`, `session`, `weekly`, `fable_week`, `opus_week`, or `sonnet_week` | `auto` | Preferred window, with fallback when unavailable |
 | `interval_seconds` | integer, minimum 60 | `300` | Refresh cadence; smaller values become 60 |
 | `bar_width` | integer from 1 to 30 | `10` | Width of the filled/empty usage bar |
 
-The requested window is a preference. If it is missing or has no finite usage
-percentage, the plugin automatically uses the other valid Session/Weekly
-window. This matters for account types such as Max accounts that may not expose
-a five-hour Session window. The activity says `5h <bar> N% USED` for the
-actual Session window or `7d <bar> N% USED` for the actual Weekly window,
-including after fallback. Percentages are rounded and clamped to 0–100.
+With `codex`, `auto` prefers the five-hour Session window and falls back to
+the seven-day Weekly window. With `claude`, `auto` prefers a Fable weekly
+limit when Hermes exposes one, then Opus, the all-model weekly window, the
+five-hour session, and finally Sonnet. An explicitly selected window is still a
+preference: the plugin falls back instead of removing a previously successful
+presence when that account does not expose the requested limit.
 
-If the usage fetch fails, neither window is valid, or Discord rejects a
+The activity labels the actual selected window as `5h`, `7d`, `7d Fable`,
+`7d Opus`, or `7d Sonnet`, including after fallback. Percentages are rounded
+and clamped to 0–100.
+
+If the usage fetch fails, no supported window is valid, or Discord rejects a
 presence update, the plugin leaves the last successfully applied activity in
 place and retries on the next interval. Reconnects trigger an immediate refresh.
 Unloading the plugin cancels its work and removes its listeners but deliberately
@@ -70,10 +89,13 @@ does not clear or replace the bot's current Discord activity.
 ## Authentication and security
 
 - The plugin reads no token files directly. It calls Hermes'
-  `agent.account_usage.fetch_account_usage("openai-codex")`, which uses the
-  active profile's existing OpenAI Codex authentication.
-- It does not store, log, or transmit OpenAI or Discord credentials. Network
-  access for the usage lookup remains in Hermes' account-usage implementation.
+  `agent.account_usage.fetch_account_usage()` with `openai-codex` or
+  `anthropic`, using the active profile's existing authentication.
+- Claude account limits require an OAuth-backed Anthropic login; Anthropic API
+  keys do not expose subscription usage through Hermes.
+- It does not store, log, or transmit OpenAI, Anthropic, or Discord credentials.
+  Network access for the usage lookup remains in Hermes' account-usage
+  implementation.
 - It uses the Discord `Bot` already owned by the Hermes adapter and needs no
   separate bot token or extra privileged Discord intent.
 - Discord presence is public to people who can see the bot. Enabling this

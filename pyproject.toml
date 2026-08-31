@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hermes-discord-usage-presence"
 version = "0.1.0"
-description = "Hermes plugin that shows OpenAI Codex usage in Discord presence"
+description = "Hermes plugin that shows Codex or Claude usage in Discord presence"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
