@@ -119,6 +119,7 @@ class _BotState:
     bot: Any
     on_ready: Any
     on_disconnect: Any
+    on_resumed: Any = None
     task: Optional[asyncio.Task] = None
     generation: int = 0
     last_good_text: Optional[str] = None
@@ -216,14 +217,21 @@ class PresenceController:
             if state is not None and state.bot is bot:
                 self._stop(state)
 
+        async def on_resumed() -> None:
+            state = self._states.get(key)
+            if state is not None and state.bot is bot and not self._closed:
+                self._start(state)
+
         state = _BotState(
             bot=bot,
             on_ready=on_ready,
             on_disconnect=on_disconnect,
+            on_resumed=on_resumed,
         )
         self._states[key] = state
         bot.add_listener(on_ready, "on_ready")
         bot.add_listener(on_disconnect, "on_disconnect")
+        bot.add_listener(on_resumed, "on_resumed")
 
         # Hermes currently wires platform handlers after Discord is ready.
         # Start now rather than waiting for a future reconnect event.
@@ -335,6 +343,10 @@ class PresenceController:
             state.bot.remove_listener(state.on_disconnect, "on_disconnect")
         except Exception:
             logger.debug("Could not remove Discord on_disconnect listener", exc_info=True)
+        try:
+            state.bot.remove_listener(state.on_resumed, "on_resumed")
+        except Exception:
+            logger.debug("Could not remove Discord on_resumed listener", exc_info=True)
 
     def close(self) -> None:
         """Remove listeners and cancel work without changing Discord's current activity."""

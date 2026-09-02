@@ -342,7 +342,11 @@ def test_attach_ready_bot_is_immediate_and_idempotent():
         await started.wait()
         controller.attach(bot, object())
 
-        assert [name for _, name in bot.add_calls] == ["on_ready", "on_disconnect"]
+        assert [name for _, name in bot.add_calls] == [
+            "on_ready",
+            "on_disconnect",
+            "on_resumed",
+        ]
         assert len(ctx.tasks) == 1
         controller.close()
         await asyncio.sleep(0)
@@ -382,6 +386,33 @@ def test_disconnect_reconnect_replaces_task_and_stale_callback_is_harmless():
     asyncio.run(run())
 
 
+def test_disconnect_resume_restarts_without_ready():
+    async def run():
+        ctx = FakeContext()
+        bot = FakeBot(ready=True)
+        controller = presence.PresenceController(ctx, presence.PresenceSettings())
+
+        async def wait_forever(attached_bot):
+            await asyncio.Event().wait()
+
+        controller._run = wait_forever
+        controller.attach(bot, None)
+        first = ctx.tasks[-1]
+
+        await bot.listeners["on_disconnect"]()
+        assert first.cancelled() or first.cancelling()
+
+        await bot.listeners["on_resumed"]()
+        second = ctx.tasks[-1]
+        assert second is not first
+        assert controller._states[id(bot)].task is second
+
+        controller.close()
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+
+
 def test_unload_removes_listeners_cancels_tasks_and_never_clears_activity():
     async def run():
         ctx = FakeContext()
@@ -395,7 +426,11 @@ def test_unload_removes_listeners_cancels_tasks_and_never_clears_activity():
         controller.close()
         await asyncio.sleep(0)
 
-        assert {name for _, name in bot.remove_calls} == {"on_ready", "on_disconnect"}
+        assert {name for _, name in bot.remove_calls} == {
+            "on_ready",
+            "on_disconnect",
+            "on_resumed",
+        }
         assert bot.listeners == {}
         assert task.cancelled()
         assert bot.presence_calls == []
